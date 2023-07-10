@@ -33,7 +33,7 @@ import org.apache.spark.sql.execution.ui.SparkListenerSQLExecutionStart;
 import com.google.common.base.Splitter;
 import com.typesafe.config.Config;
 
-import datahub.spark.consumer.impl.McpEmitter;
+import datahub.spark.consumer.impl.McpEmitterBak;
 import datahub.spark.model.AppEndEvent;
 import datahub.spark.model.AppStartEvent;
 import datahub.spark.model.DatasetLineage;
@@ -63,7 +63,7 @@ public class DatahubSparkListenerBak extends SparkListener {
 
   private final Map<String, AppStartEvent> appDetails = new ConcurrentHashMap<>();
   private final Map<String, Map<Long, SQLQueryExecStartEvent>> appSqlDetails = new ConcurrentHashMap<>();
-  private final Map<String, McpEmitter> appEmitters = new ConcurrentHashMap<>();
+  private final Map<String, McpEmitterBak> appEmitters = new ConcurrentHashMap<>();
   private final Map<String, Config> appConfig = new ConcurrentHashMap<>();
 
   public DatahubSparkListenerBak() {
@@ -169,7 +169,7 @@ public class DatahubSparkListenerBak extends SparkListener {
 
       appSqlDetails.get(ctx.applicationId()).put(sqlStart.executionId(), evt);
 
-      McpEmitter emitter = appEmitters.get(ctx.applicationId());
+      McpEmitterBak emitter = appEmitters.get(ctx.applicationId());
       if (emitter != null) {
         emitter.accept(evt);
       }
@@ -219,7 +219,7 @@ public class DatahubSparkListenerBak extends SparkListener {
             AppEndEvent evt = new AppEndEvent(LineageUtils.getMaster(sc), getPipelineName(sc), sc.applicationId(),
                 applicationEnd.time(), start);
 
-            McpEmitter emitter = appEmitters.get(sc.applicationId());
+            McpEmitterBak emitter = appEmitters.get(sc.applicationId());
             if (emitter != null) {
               emitter.accept(evt);
               try {
@@ -288,7 +288,7 @@ public class DatahubSparkListenerBak extends SparkListener {
           SQLQueryExecEndEvent evt =
               new SQLQueryExecEndEvent(LineageUtils.getMaster(sc), sc.appName(), sc.applicationId(), sqlEnd.time(),
                   sqlEnd.executionId(), start);
-          McpEmitter emitter = appEmitters.get(sc.applicationId());
+          McpEmitterBak emitter = appEmitters.get(sc.applicationId());
           if (emitter != null) {
             emitter.accept(evt);
           }
@@ -314,7 +314,7 @@ public class DatahubSparkListenerBak extends SparkListener {
 //      appEmitters.computeIfAbsent(appId,
 //          s -> datahubConf.hasPath(COALESCE_KEY) && datahubConf.getBoolean(COALESCE_KEY) ? new CoalesceJobsEmitter(
 //              datahubConf) : new McpEmitter(datahubConf)).accept(evt);
-      appEmitters.computeIfAbsent(appId, s -> new McpEmitter(datahubConf)).accept(evt);
+      appEmitters.computeIfAbsent(appId, s -> new McpEmitterBak(datahubConf)).accept(evt);
       consumers().forEach(c -> c.accept(evt));
       appDetails.put(appId, evt);
       appSqlDetails.put(appId, new ConcurrentHashMap<>());

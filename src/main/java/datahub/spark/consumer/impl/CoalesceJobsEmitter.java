@@ -28,7 +28,7 @@ import datahub.spark.model.SQLQueryExecStartEvent;
 import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
-public class CoalesceJobsEmitter extends HttpEmitterBase {
+public class CoalesceJobsEmitter extends McpEmitter {
 
   private static final String PARENT_JOB_KEY = "parent.datajob_urn";
   private final String parentJobUrn;
