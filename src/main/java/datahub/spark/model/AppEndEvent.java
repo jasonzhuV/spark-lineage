@@ -8,29 +8,32 @@ import java.util.Collections;
 import java.util.List;
 import lombok.Getter;
 import lombok.ToString;
+import lombok.extern.slf4j.Slf4j;
 
 
 @ToString
 @Getter
+@Slf4j
 public class AppEndEvent extends LineageEvent {
 
-  private final AppStartEvent start;
+    private final AppStartEvent start;
 
-  public AppEndEvent(String master, String appName, String appId, long time, AppStartEvent start) {
-    super(master, appName, appId, time);
-    this.start = start;
-  }
+    public AppEndEvent(String master, String appName, String appId, long time, AppStartEvent start) {
+        super(master, appName, appId, time);
+        this.start = start;
+    }
 
-  @Override
-  public List<MetadataChangeProposalWrapper> asMetadataEvents() {
-    DataFlowUrn flowUrn = LineageUtils.flowUrn(getMaster(), getAppName());
+    @Override
+    public List<MetadataChangeProposalWrapper> asMetadataEvents() {
+        log.warn("==========> AppEndEvent.asMetadataEvents is called");
+        DataFlowUrn flowUrn = LineageUtils.flowUrn(getMaster(), getAppName());
 
-    StringMap customProps = start.customProps();
-    customProps.put("completedAt", timeStr());
+        StringMap customProps = start.customProps();
+        customProps.put("completedAt", timeStr());
 
-    DataFlowInfo flowInfo = new DataFlowInfo().setName(getAppName()).setCustomProperties(customProps);
+        DataFlowInfo flowInfo = new DataFlowInfo().setName(getAppName()).setCustomProperties(customProps);
 
-    return Collections.singletonList(MetadataChangeProposalWrapper.create(
-        b -> b.entityType("dataFlow").entityUrn(flowUrn).upsert().aspect(flowInfo)));
-  }
+        return Collections.singletonList(MetadataChangeProposalWrapper.create(
+                b -> b.entityType("dataFlow").entityUrn(flowUrn).upsert().aspect(flowInfo)));
+    }
 }

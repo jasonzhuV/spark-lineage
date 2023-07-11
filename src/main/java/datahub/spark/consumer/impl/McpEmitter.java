@@ -51,7 +51,6 @@ public class McpEmitter implements LineageConsumer {
         if (emitter.isPresent()) {
             mcpws.stream().map(mcpw -> {
                 try {
-                    //log.warn("===============>  emitting mcpw = " + mcpw);
                     return emitter.get().emit(mcpw);
                 } catch (IOException ioException) {
                     log.error("Failed to emit metadata to DataHub", ioException);

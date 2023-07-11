@@ -28,6 +28,7 @@ public class SQLQueryExecEndEvent extends LineageEvent {
 
   @Override
   public List<MetadataChangeProposalWrapper> asMetadataEvents() {
+    log.warn("==========> SQLQueryExecEndEvent.asMetadataEvents is called");
     DataJobUrn jobUrn = start.jobUrn();
     StringMap customProps = start.customProps();
     customProps.put("completedAt", timeStr());
