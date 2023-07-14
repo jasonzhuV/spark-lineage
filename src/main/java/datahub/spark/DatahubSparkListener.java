@@ -5,7 +5,12 @@ import com.typesafe.config.Config;
 import datahub.spark.consumer.impl.McpEmitter;
 import datahub.spark.model.*;
 import datahub.spark.model.dataset.SparkDataset;
+import datahub.spark.model.sinkbased.SinkBasedAppEndEvent;
+import datahub.spark.model.sinkbased.SinkBasedAppStartEvent;
+import datahub.spark.model.sinkbased.SinkBasedSqlQueryExecEndEvent;
+import datahub.spark.model.sinkbased.SinkBasedSqlQueryExecStartEvent;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang.StringUtils;
 import org.apache.spark.SparkConf;
 import org.apache.spark.SparkContext;
 import org.apache.spark.SparkEnv;
@@ -29,7 +34,6 @@ import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
 import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
 
@@ -44,16 +48,15 @@ public class DatahubSparkListener extends SparkListener {
     public static final String DATABRICKS_CLUSTER_KEY = "databricks.cluster";
     public static final String PIPELINE_KEY = "metadata.pipeline";
     public static final String PIPELINE_PLATFORM_INSTANCE_KEY = PIPELINE_KEY + ".platformInstance";
-
     public static final String COALESCE_KEY = "coalesce_jobs";
-
     private final Map<String, AppStartEvent> appDetails = new ConcurrentHashMap<>();
+    private final Map<String, Map<Long, AppStartEvent>> appRelateToTargetTable = new ConcurrentHashMap<>();
     private final Map<String, Map<Long, SQLQueryExecStartEvent>> appSqlDetails = new ConcurrentHashMap<>();
     private final Map<String, McpEmitter> appEmitters = new ConcurrentHashMap<>();
     private final Map<String, Config> appConfig = new ConcurrentHashMap<>();
 
     public DatahubSparkListener() {
-        log.warn("DatahubSparkListener initialised.");
+        log.warn("==========> DatahubSparkListener initialised.");
     }
 
     private class SqlStartTask {
@@ -73,33 +76,18 @@ public class DatahubSparkListener extends SparkListener {
                 log.error("Context is null skipping run");
                 return;
             }
-
             if (ctx.conf() == null) {
                 log.error("Context does not have config. Skipping run");
                 return;
             }
-
             if (sqlStart == null) {
                 log.error("sqlStart is null skipping run");
                 return;
             }
-
-            appSqlDetails
-                    .get(ctx.applicationId())
-                    .put(sqlStart.executionId(), new SQLQueryExecStartEvent(
-                            ctx.conf().get("spark.master"),
-                            getPipelineName(ctx),
-                            ctx.applicationId(),
-                            sqlStart.time(),
-                            sqlStart.executionId(),
-                            null)
-                    );
-
             Optional<? extends Collection<SparkDataset>> outputDs = DatasetExtractor.asDataset(plan, ctx, true);
             if (!outputDs.isPresent() || outputDs.get().isEmpty()) {
                 return;
             }
-            outputDs.get().forEach(o -> log.warn("==========> outputDs = {}", o.urn().toString()));
             // Here assumption is that there will be only single target for single sql query
             DatasetLineage lineage = new DatasetLineage(sqlStart.description(), plan.toString(), outputDs.get().iterator().next());
             Collection<QueryPlan<?>> allInners = new ArrayList<>();
@@ -117,44 +105,31 @@ public class DatahubSparkListener extends SparkListener {
                     return true;
                 }
             });
-
             for (QueryPlan<?> qp : allInners) {
                 if (!(qp instanceof LogicalPlan)) {
                     continue;
                 }
                 LogicalPlan nestedPlan = (LogicalPlan) qp;
-
                 nestedPlan.collect(new AbstractPartialFunction<LogicalPlan, Void>() {
-
                     @Override
                     public Void apply(LogicalPlan plan) {
                         Optional<? extends Collection<SparkDataset>> inputDs = DatasetExtractor.asDataset(plan, ctx, false);
                         inputDs.ifPresent(x -> x.forEach(lineage::addSource));
                         return null;
                     }
-
                     @Override
                     public boolean isDefinedAt(LogicalPlan x) {
                         return true;
                     }
                 });
             }
-            SQLQueryExecStartEvent evt = new SQLQueryExecStartEvent(
-                    ctx.conf().get("spark.master"),
-                    getPipelineName(ctx),
-                    ctx.applicationId(),
-                    sqlStart.time(),
-                    sqlStart.executionId(),
-                    lineage
-            );
-
-            appSqlDetails.get(ctx.applicationId()).put(sqlStart.executionId(), evt);
-
             McpEmitter emitter = appEmitters.get(ctx.applicationId());
             if (emitter != null) {
-                emitter.accept(evt);
+                // application
+                checkOrEmitApplication(ctx, emitter, lineage, sqlStart.executionId());
+                // sql
+                emitSqlExec(ctx, emitter, sqlStart, lineage);
             }
-            consumers().forEach(c -> c.accept(evt));
         }
     }
 
@@ -162,7 +137,6 @@ public class DatahubSparkListener extends SparkListener {
     public void onApplicationStart(SparkListenerApplicationStart applicationStart) {
         try {
             LineageUtils.findSparkCtx().foreach(new AbstractFunction1<SparkContext, Void>() {
-
                 @Override
                 public Void apply(SparkContext sc) {
                     checkOrCreateApplicationSetup(sc);
@@ -186,32 +160,31 @@ public class DatahubSparkListener extends SparkListener {
             LineageUtils.findSparkCtx().foreach(new AbstractFunction1<SparkContext, Void>() {
                 @Override
                 public Void apply(SparkContext sc) {
-                    AppStartEvent start = appDetails.remove(sc.applicationId());
-                    appSqlDetails.remove(sc.applicationId());
-                    if (start == null) {
-                        log.error("Application end event received, but start event missing for appId " + sc.applicationId());
-                    } else {
-                        AppEndEvent evt = new AppEndEvent(LineageUtils.getMaster(sc), getPipelineName(sc), sc.applicationId(),
-                                applicationEnd.time(), start);
-
-                        McpEmitter emitter = appEmitters.get(sc.applicationId());
-                        if (emitter != null) {
+                    appRelateToTargetTable.remove(sc.applicationId()).forEach((sqlQueryId,event) -> {
+                        SinkBasedAppStartEvent start = (SinkBasedAppStartEvent) event;
+                        if (start == null) {
+                            log.error("Application end event received, but start event missing for appId " + sc.applicationId());
+                        } else {
+                            AppEndEvent evt = new SinkBasedAppEndEvent(LineageUtils.getMaster(sc), getPipelineName(sc), sc.applicationId(), applicationEnd.time(), start);
+                            McpEmitter emitter = appEmitters.get(sc.applicationId());
                             emitter.accept(evt);
-                            try {
-                                emitter.close();
-                                appEmitters.remove(sc.applicationId());
-                            } catch (Exception e) {
-                                log.warn("Failed to close underlying emitter due to " + e.getMessage());
-                            }
+                            consumers().forEach(x -> {
+                                x.accept(evt);
+                                try {
+                                    x.close();
+                                } catch (IOException e) {
+                                    log.warn("Failed to close lineage consumer", e);
+                                }
+                            });
                         }
-                        consumers().forEach(x -> {
-                            x.accept(evt);
-                            try {
-                                x.close();
-                            } catch (IOException e) {
-                                log.warn("Failed to close lineage consumer", e);
-                            }
-                        });
+                    });
+                    if (appEmitters.get(sc.applicationId()) != null) {
+                        try {
+                            appEmitters.get(sc.applicationId()).close();
+                            appEmitters.remove(sc.applicationId());
+                        } catch (Exception e) {
+                            log.warn("Failed to close underlying emitter due to " + e.getMessage());
+                        }
                     }
                     return null;
                 }
@@ -251,11 +224,11 @@ public class DatahubSparkListener extends SparkListener {
         LineageUtils.findSparkCtx().foreach(new AbstractFunction1<SparkContext, Void>() {
             @Override
             public Void apply(SparkContext sc) {
-                SQLQueryExecStartEvent start = appSqlDetails.get(sc.applicationId()).remove(sqlEnd.executionId());
+                SinkBasedSqlQueryExecStartEvent start = (SinkBasedSqlQueryExecStartEvent) appSqlDetails.get(sc.applicationId()).remove(sqlEnd.executionId());
                 if (start == null) {
 //                    log.warn("Execution end event received, but start event missing for appId/sql exec Id " + sc.applicationId() + ":" + sqlEnd.executionId());
                 } else if (start.getDatasetLineage() != null) {
-                    SQLQueryExecEndEvent evt = new SQLQueryExecEndEvent(
+                    SinkBasedSqlQueryExecEndEvent evt = new SinkBasedSqlQueryExecEndEvent(
                             LineageUtils.getMaster(sc),
                             sc.appName(),
                             sc.applicationId(),
@@ -273,19 +246,46 @@ public class DatahubSparkListener extends SparkListener {
     }
 
     private synchronized void checkOrCreateApplicationSetup(SparkContext ctx) {
-        ExecutorService pool = null;
         String appId = ctx.applicationId();
         Config datahubConfig = appConfig.get(appId);
         if (datahubConfig == null) {
             Config datahubConf = LineageUtils.parseSparkConfig();
             appConfig.put(appId, datahubConf);
-            Config pipelineConfig = datahubConf.hasPath(PIPELINE_KEY) ? datahubConf.getConfig(PIPELINE_KEY) : com.typesafe.config.ConfigFactory.empty();
-            AppStartEvent evt = new AppStartEvent(LineageUtils.getMaster(ctx), getPipelineName(ctx), appId, ctx.startTime(), ctx.sparkUser(), pipelineConfig);
-            appEmitters.computeIfAbsent(appId, s -> new McpEmitter(datahubConf)).accept(evt);
-            consumers().forEach(c -> c.accept(evt));
-            appDetails.put(appId, evt);
+            appEmitters.computeIfAbsent(appId, s -> new McpEmitter(datahubConf));
             appSqlDetails.put(appId, new ConcurrentHashMap<>());
+            appRelateToTargetTable.put(appId, new ConcurrentHashMap<>());
         }
+    }
+
+
+    /**
+     * emitApplication
+     * if exists output dataset
+     * @param ctx context
+     */
+    private synchronized void checkOrEmitApplication(SparkContext ctx, McpEmitter emitter, DatasetLineage datasetLineage, Long sqlQueryExecId) {
+        String appId = ctx.applicationId();
+        SparkDataset sink = datasetLineage.getSink();
+        log.warn("==========> sinkDatasetNameEntity = {}", sink.urn().getDatasetNameEntity());
+        Config datahubConf = appConfig.get(ctx.applicationId());
+        Config pipelineConfig = datahubConf.hasPath(PIPELINE_KEY) ? datahubConf.getConfig(PIPELINE_KEY) : com.typesafe.config.ConfigFactory.empty();
+        SinkBasedAppStartEvent event = new SinkBasedAppStartEvent(LineageUtils.getMaster(ctx), getPipelineName(ctx), appId, ctx.startTime(), ctx.sparkUser(), pipelineConfig, datasetLineage);
+        emitter.accept(event);
+        appRelateToTargetTable.get(appId).put(sqlQueryExecId, event);
+    }
+
+    private synchronized void emitSqlExec(SparkContext ctx, McpEmitter emitter, SparkListenerSQLExecutionStart sqlStart, DatasetLineage lineage) {
+        SinkBasedSqlQueryExecStartEvent evt = new SinkBasedSqlQueryExecStartEvent(
+                ctx.conf().get("spark.master"),
+                getPipelineName(ctx),
+                ctx.applicationId(),
+                sqlStart.time(),
+                sqlStart.executionId(),
+                lineage
+        );
+        appSqlDetails.get(ctx.applicationId()).put(sqlStart.executionId(), evt);
+        emitter.accept(evt);
+        consumers().forEach(c -> c.accept(evt));
     }
 
     private String getPipelineName(SparkContext cx) {
@@ -312,6 +312,7 @@ public class DatahubSparkListener extends SparkListener {
         LogicalPlan plan = queryExec.optimizedPlan();
         SparkSession sess = queryExec.sparkSession();
         SparkContext ctx = sess.sparkContext();
+
         checkOrCreateApplicationSetup(ctx);
 
         (new SqlStartTask(sqlStart, plan, ctx)).run();

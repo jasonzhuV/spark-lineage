@@ -14,7 +14,6 @@ import java.util.stream.Collectors;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.spark.SparkContext;
-import org.apache.spark.sql.catalyst.catalog.CatalogTable;
 import org.apache.spark.sql.catalyst.catalog.HiveTableRelation;
 import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan;
 import org.apache.spark.sql.execution.FileSourceScanExec;
@@ -47,22 +46,19 @@ import lombok.extern.slf4j.Slf4j;
 import scala.Option;
 import scala.collection.JavaConversions;
 import scala.runtime.AbstractFunction1;
-
 /**
- * @author jason
+ * @author : zhupeiwen
+ * @date : 2023/7/14
  */
 @Slf4j
-public class DatasetExtractor {
+public class DatasetExtractorBak {
 
     private static final Map<Class<? extends LogicalPlan>, PlanToDataset> PLAN_TO_DATASET = new HashMap<>();
     private static final Map<Class<? extends SparkPlan>, SparkPlanToDataset> SPARKPLAN_TO_DATASET = new HashMap<>();
     private static final Map<Class<? extends BaseRelation>, RelationToDataset> REL_TO_DATASET = new HashMap<>();
     private static final Set<Class<? extends LogicalPlan>> OUTPUT_CMD = ImmutableSet.of(
-            InsertIntoHadoopFsRelationCommand.class,
-            SaveIntoDataSourceCommand.class,
-            CreateDataSourceTableAsSelectCommand.class,
-            CreateHiveTableAsSelectCommand.class,
-            InsertIntoHiveTable.class);
+            InsertIntoHadoopFsRelationCommand.class, SaveIntoDataSourceCommand.class,
+            CreateDataSourceTableAsSelectCommand.class, CreateHiveTableAsSelectCommand.class, InsertIntoHiveTable.class);
     private static final String DATASET_ENV_KEY = "metadata.dataset.env";
     private static final String DATASET_PLATFORM_INSTANCE_KEY = "metadata.dataset.platformInstance";
     private static final String TABLE_HIVE_PLATFORM_ALIAS = "metadata.table.hive_platform_alias";
@@ -70,7 +66,7 @@ public class DatasetExtractor {
     private static final String REMOVE_PARTITION_PATTERN = "metadata.remove_partition_pattern";
     // TODO InsertIntoHiveDirCommand, InsertIntoDataSourceDirCommand
 
-    private DatasetExtractor() {
+    private DatasetExtractorBak() {
 
     }
 
@@ -129,36 +125,21 @@ public class DatasetExtractor {
         PLAN_TO_DATASET.put(InsertIntoHadoopFsRelationCommand.class, (p, ctx, datahubConfig) -> {
             InsertIntoHadoopFsRelationCommand cmd = (InsertIntoHadoopFsRelationCommand) p;
             if (cmd.catalogTable().isDefined()) {
-                return Optional.of(Collections.singletonList(new CatalogTableDataset(
-                        cmd.catalogTable().get(),
-                        getCommonPlatformInstance(datahubConfig),
-                        getTableHivePlatformAlias(datahubConfig),
-                        getCommonFabricType(datahubConfig)
-                )));
+                return Optional.of(Collections.singletonList(new CatalogTableDataset(cmd.catalogTable().get(),
+                        getCommonPlatformInstance(datahubConfig), getTableHivePlatformAlias(datahubConfig),
+                        getCommonFabricType(datahubConfig))));
             }
-            return Optional.of(Collections.singletonList(new HdfsPathDataset(
-                    cmd.outputPath(),
-                    getCommonPlatformInstance(datahubConfig),
-                    getIncludeScheme(datahubConfig),
-                    getCommonFabricType(datahubConfig),
-                    getRemovePartitionPattern(datahubConfig))));
+            return Optional.of(Collections.singletonList(new HdfsPathDataset(cmd.outputPath(),
+                    getCommonPlatformInstance(datahubConfig), getIncludeScheme(datahubConfig),
+                    getCommonFabricType(datahubConfig), getRemovePartitionPattern(datahubConfig))));
         });
 
         PLAN_TO_DATASET.put(LogicalRelation.class, (p, ctx, datahubConfig) -> {
-//            BaseRelation baseRel = ((LogicalRelation) p).relation();
-//            if (!REL_TO_DATASET.containsKey(baseRel.getClass())) {
-//                return Optional.empty();
-//            }
-//            return REL_TO_DATASET.get(baseRel.getClass()).fromRelation(baseRel, ctx, datahubConfig);
-
-            // above to make specific type of Dataset()
-            Option<CatalogTable> catalogTable = ((LogicalRelation) p).catalogTable();
-            return Optional.of(Collections.singletonList(new CatalogTableDataset(
-                    catalogTable.get(),
-                    getCommonPlatformInstance(datahubConfig),
-                    getTableHivePlatformAlias(datahubConfig),
-                    getCommonFabricType(datahubConfig)
-            )));
+            BaseRelation baseRel = ((LogicalRelation) p).relation();
+            if (!REL_TO_DATASET.containsKey(baseRel.getClass())) {
+                return Optional.empty();
+            }
+            return REL_TO_DATASET.get(baseRel.getClass()).fromRelation(baseRel, ctx, datahubConfig);
         });
 
         PLAN_TO_DATASET.put(SaveIntoDataSourceCommand.class, (p, ctx, datahubConfig) -> {
@@ -240,7 +221,7 @@ public class DatasetExtractor {
                                 .fromSparkPlanNode(leafPlan, ctx, datahubConfig);
                         dataset.ifPresent(x -> datasets.addAll(x));
                     } else {
-                        log.warn(leafPlan.getClass() + " is not yet supported. Please contact datahub team for further support.");
+                        log.error(leafPlan.getClass() + " is not yet supported. Please contact datahub team for further support.");
                     }
                     return null;
                 }
@@ -249,15 +230,15 @@ public class DatasetExtractor {
         });
     }
 
-    static Optional<? extends Collection<SparkDataset>> asDataset(LogicalPlan logicalPlan, SparkContext ctx, boolean outputNode) {
+    static Optional<? extends Collection<SparkDataset>> asDataset(LogicalPlan logicalPlan, SparkContext ctx,
+                                                                  boolean outputNode) {
+
         if (!outputNode && OUTPUT_CMD.contains(logicalPlan.getClass())) {
             return Optional.empty();
         }
-        if (outputNode && !OUTPUT_CMD.contains(logicalPlan.getClass())) {
-            return Optional.empty();
-        }
+
         if (!PLAN_TO_DATASET.containsKey(logicalPlan.getClass())) {
-            log.warn("==========> {} is not supported yet. Please contact datahub team for further support.", logicalPlan.getClass());
+            log.error(logicalPlan.getClass() + " is not supported yet. Please contact datahub team for further support. ");
             return Optional.empty();
         }
         Config datahubconfig = LineageUtils.parseSparkConfig();
@@ -284,6 +265,7 @@ public class DatasetExtractor {
         try {
             fabricType = FabricType.valueOf(fabricTypeString);
         } catch (IllegalArgumentException e) {
+            log.warn("Invalid env ({}). Setting env to default PROD", fabricTypeString);
             fabricType = FabricType.PROD;
         }
         return fabricType;
