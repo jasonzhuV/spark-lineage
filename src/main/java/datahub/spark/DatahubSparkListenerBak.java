@@ -101,7 +101,10 @@ public class DatahubSparkListenerBak extends SparkListener {
             }
             outputDs.get().forEach(o -> log.warn("==========> outputDs = {}", o.urn().toString()));
             // Here assumption is that there will be only single target for single sql query
-            DatasetLineage lineage = new DatasetLineage(sqlStart.description(), plan.toString(), outputDs.get().iterator().next());
+            DatasetLineage lineage = new DatasetLineage();
+            lineage.setPlan(sqlStart.description());
+            lineage.setPlan(plan.toString());
+            lineage.setSink(outputDs.get().iterator().next());
             Collection<QueryPlan<?>> allInners = new ArrayList<>();
 
             plan.collect(new AbstractPartialFunction<LogicalPlan, Void>() {

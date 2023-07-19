@@ -6,24 +6,18 @@ import java.util.Set;
 
 import datahub.spark.model.dataset.SparkDataset;
 
-import lombok.Getter;
-import lombok.RequiredArgsConstructor;
-import lombok.ToString;
+import lombok.*;
 
-@RequiredArgsConstructor
+@Data
+@AllArgsConstructor
+@NoArgsConstructor
 @ToString
 public class DatasetLineage {
 
-  private final Set<SparkDataset> sources = new HashSet<>();
-
-  @Getter
-  private final String callSiteShort;
-  
-  @Getter
-  private final String plan;
-
-  @Getter
-  private final SparkDataset sink;
+  private Set<SparkDataset> sources = new HashSet<>();
+  private String callSiteShort;
+  private String plan;
+  private SparkDataset sink;
 
   public void addSource(SparkDataset source) {
     sources.add(source);

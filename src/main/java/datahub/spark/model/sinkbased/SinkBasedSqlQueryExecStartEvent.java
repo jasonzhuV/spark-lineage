@@ -73,7 +73,7 @@ public class SinkBasedSqlQueryExecStartEvent extends SQLQueryExecStartEvent {
 //        String plan = LineageUtils.scrubPlan(datasetLineage.getPlan());
 //        String id = Joiner.on(",").join(sinkUrn, sourceUrns, plan);
 //        return new DataJobUrn(flowUrn(), "planHash_" + LineageUtils.hash(id));
-        return new DataJobUrn(flowUrn(), String.join("^", sourceNames));
+        return new DataJobUrn(flowUrn(), String.valueOf(sourceNames.hashCode() & Integer.MAX_VALUE));
     }
 
     DataFlowUrn flowUrn() {

@@ -257,7 +257,7 @@ public class DatasetExtractor {
             return Optional.empty();
         }
         if (!PLAN_TO_DATASET.containsKey(logicalPlan.getClass())) {
-            log.warn("==========> {} is not supported yet. Please contact datahub team for further support.", logicalPlan.getClass());
+//            log.warn("==========> {} is not supported yet. Please contact datahub team for further support.", logicalPlan.getClass());
             return Optional.empty();
         }
         Config datahubconfig = LineageUtils.parseSparkConfig();

@@ -1,16 +1,24 @@
 package datahub.spark;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.base.Splitter;
 import com.typesafe.config.Config;
+import datahub.shaded.org.apache.kafka.clients.producer.KafkaProducer;
+import datahub.shaded.org.apache.kafka.clients.producer.ProducerConfig;
+import datahub.shaded.org.apache.kafka.clients.producer.ProducerRecord;
+import datahub.shaded.org.apache.kafka.common.serialization.StringSerializer;
 import datahub.spark.consumer.impl.McpEmitter;
 import datahub.spark.model.*;
 import datahub.spark.model.dataset.SparkDataset;
+import datahub.spark.model.kafka.Message;
+import datahub.spark.model.kafka.QueryTable;
+import datahub.spark.model.kafka.QueryTableInfo;
 import datahub.spark.model.sinkbased.SinkBasedAppEndEvent;
 import datahub.spark.model.sinkbased.SinkBasedAppStartEvent;
 import datahub.spark.model.sinkbased.SinkBasedSqlQueryExecEndEvent;
 import datahub.spark.model.sinkbased.SinkBasedSqlQueryExecStartEvent;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.lang.StringUtils;
 import org.apache.spark.SparkConf;
 import org.apache.spark.SparkContext;
 import org.apache.spark.SparkEnv;
@@ -55,8 +63,31 @@ public class DatahubSparkListener extends SparkListener {
     private final Map<String, McpEmitter> appEmitters = new ConcurrentHashMap<>();
     private final Map<String, Config> appConfig = new ConcurrentHashMap<>();
 
+    private KafkaProducer<String, String> producer;
+    private static final Properties prop = new Properties();
+    private static final String KAFKA_BROKERS = "node1:9092,node2:9092,node3:9092";
+    private static final String QUERY_RECORD = "ark-table-query";
+
     public DatahubSparkListener() {
         log.warn("==========> DatahubSparkListener initialised.");
+        prop.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, KAFKA_BROKERS);
+        prop.put("key.serializer", StringSerializer.class.getName());
+        prop.put("value.serializer", StringSerializer.class.getName());
+        prop.put("acks","all");
+        prop.put("retries",0);
+        prop.put("batch.size",16384);
+        prop.put("linger.ms",1);
+        prop.put("buffer.memory",33554432);
+        producer = new KafkaProducer<>(prop);
+    }
+
+    public <T> void sendKafka(Message message, String topic) {
+        ObjectMapper om = new ObjectMapper();
+        try {
+            producer.send(new ProducerRecord<String, String>(topic, om.writeValueAsString(message)));
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     private class SqlStartTask {
@@ -84,12 +115,18 @@ public class DatahubSparkListener extends SparkListener {
                 log.error("sqlStart is null skipping run");
                 return;
             }
+
+//            Optional<? extends Collection<SparkDataset>> upStreamDatasets = DatasetExtractor.getUpStreamDatasets(plan, ctx);
+//            upStreamDatasets.ifPresent(sparkDatasets -> sparkDatasets.forEach(d -> log.warn("==========> urn = {}", d.urn())));
+//            log.warn("==========> user = {}", ctx.sparkUser());
+//            log.warn("==========> timestamp = {}", ctx.startTime());
+
             Optional<? extends Collection<SparkDataset>> outputDs = DatasetExtractor.asDataset(plan, ctx, true);
-            if (!outputDs.isPresent() || outputDs.get().isEmpty()) {
-                return;
-            }
+
             // Here assumption is that there will be only single target for single sql query
-            DatasetLineage lineage = new DatasetLineage(sqlStart.description(), plan.toString(), outputDs.get().iterator().next());
+            DatasetLineage lineage = new DatasetLineage();
+            lineage.setCallSiteShort(sqlStart.description());
+            lineage.setPlan(plan.toString());
             Collection<QueryPlan<?>> allInners = new ArrayList<>();
 
             plan.collect(new AbstractPartialFunction<LogicalPlan, Void>() {
@@ -123,6 +160,27 @@ public class DatahubSparkListener extends SparkListener {
                     }
                 });
             }
+
+            try {
+                lineage.getSources().forEach(d -> {
+                    QueryTableInfo queryTableInfo = new QueryTableInfo();
+                    queryTableInfo.setQueryText(lineage.getCallSiteShort());
+                    queryTableInfo.setTimestamp(ctx.startTime());
+                    queryTableInfo.setUser(ctx.sparkUser());
+                    queryTableInfo.setEngine("spark");
+                    queryTableInfo.setOperationName("QUERY");
+                    queryTableInfo.setQueryTable(new QueryTable(d.urn().getDatasetNameEntity().split("\\.")[0], d.urn().getDatasetNameEntity().split("\\.")[1]));
+                    sendKafka(queryTableInfo, QUERY_RECORD);
+                });
+            } catch (Exception e) {
+                log.error("==========> 访问记录埋点报错.");
+            }
+
+
+            if (!outputDs.isPresent() || outputDs.get().isEmpty()) {
+                return;
+            }
+            lineage.setSink(outputDs.get().iterator().next());
             McpEmitter emitter = appEmitters.get(ctx.applicationId());
             if (emitter != null) {
                 // application
