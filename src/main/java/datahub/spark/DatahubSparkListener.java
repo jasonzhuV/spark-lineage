@@ -40,6 +40,7 @@ import scala.runtime.AbstractPartialFunction;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.sql.Timestamp;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
@@ -65,7 +66,7 @@ public class DatahubSparkListener extends SparkListener {
 
     private KafkaProducer<String, String> producer;
     private static final Properties prop = new Properties();
-    private static final String KAFKA_BROKERS = "node1:9092,node2:9092,node3:9092";
+    private static final String KAFKA_BROKERS = "172.41.4.87:9092,172.41.4.58:9092,172.41.4.71:9092";
     private static final String QUERY_RECORD = "ark-table-query";
 
     public DatahubSparkListener() {
@@ -165,7 +166,7 @@ public class DatahubSparkListener extends SparkListener {
                 lineage.getSources().forEach(d -> {
                     QueryTableInfo queryTableInfo = new QueryTableInfo();
                     queryTableInfo.setQueryText(lineage.getCallSiteShort());
-                    queryTableInfo.setTimestamp(ctx.startTime());
+                    queryTableInfo.setTimestamp(sqlStart.time());
                     queryTableInfo.setUser(ctx.sparkUser());
                     queryTableInfo.setEngine("spark");
                     queryTableInfo.setOperationName("QUERY");
