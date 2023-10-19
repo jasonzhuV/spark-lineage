@@ -12,6 +12,11 @@ import lombok.NoArgsConstructor;
 @AllArgsConstructor
 @NoArgsConstructor
 public class QueryTableInfo implements Message {
+    /**
+     * source: 查询
+     * target: 插入
+     */
+    private String recordType;
     private String database;
     private Long duration;
     private String engine;

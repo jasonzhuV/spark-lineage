@@ -68,6 +68,7 @@ public class DatahubSparkListener extends SparkListener {
     private static final Properties prop = new Properties();
     private static final String KAFKA_BROKERS = "172.41.4.87:9092,172.41.4.58:9092,172.41.4.71:9092";
     private static final String QUERY_RECORD = "ark-table-query";
+    private static final String INSERT_RECORD = "ark-table-insert";
 
     public DatahubSparkListener() {
         log.warn("==========> DatahubSparkListener initialised.");
@@ -162,9 +163,11 @@ public class DatahubSparkListener extends SparkListener {
                 });
             }
 
+            // 查询记录
             try {
                 lineage.getSources().forEach(d -> {
                     QueryTableInfo queryTableInfo = new QueryTableInfo();
+                    queryTableInfo.setRecordType("source");
                     queryTableInfo.setQueryText(lineage.getCallSiteShort());
                     queryTableInfo.setTimestamp(sqlStart.time());
                     queryTableInfo.setUser(ctx.sparkUser());
@@ -175,13 +178,31 @@ public class DatahubSparkListener extends SparkListener {
                 });
             } catch (Exception e) {
                 log.error("==========> 访问记录埋点报错.");
+                e.printStackTrace();
             }
-
 
             if (!outputDs.isPresent() || outputDs.get().isEmpty()) {
                 return;
             }
             lineage.setSink(outputDs.get().iterator().next());
+
+            // 写入记录
+            try {
+                SparkDataset sink = lineage.getSink();
+                QueryTableInfo queryTableInfo = new QueryTableInfo();
+                queryTableInfo.setRecordType("target");
+                queryTableInfo.setQueryText(lineage.getCallSiteShort());
+                queryTableInfo.setTimestamp(sqlStart.time());
+                queryTableInfo.setUser(ctx.sparkUser());
+                queryTableInfo.setEngine("spark");
+                queryTableInfo.setOperationName("INSERT");
+                queryTableInfo.setQueryTable(new QueryTable(sink.urn().getDatasetNameEntity().split("\\.")[0], sink.urn().getDatasetNameEntity().split("\\.")[1]));
+                sendKafka(queryTableInfo, INSERT_RECORD);
+            } catch (Exception e) {
+                log.error("==========> 插入记录埋点报错.");
+                e.printStackTrace();
+            }
+
             McpEmitter emitter = appEmitters.get(ctx.applicationId());
             if (emitter != null) {
                 // application
